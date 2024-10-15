@@ -1,0 +1,440 @@
+---
+title: "DeepScence Fig 1, 2"
+output: html_document
+date: "2024-09-29"
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(reshape2)
+library(ggsignif)
+library(grid)
+library(ggforce)
+library(ggrepel)
+library(RColorBrewer)
+library(paletteer)
+library(ggpubr)
+rm(list = ls())
+setwd("~/Library/Mobile Documents/com~apple~CloudDocs/Research/Aging/")
+
+gs_name_conversion = c("SenSig", "SeneQuest", "CellAge", "CSGene", "GenAge", "SenMayo", "De Cecco et al.", "Casella et al.", "Freund et al.")
+names(gs_name_conversion) = c("sensig", "Quest", "cellAge", "CSgene", "geneAge", "Senmayo", "SASP", "trans", "network")
+```
+
+figure1: gene set assembly
+# Fig 1
+
+1a
+```{r}
+results = readRDS("./data/coreGS_v2.rds")
+gs = results
+col_sums <- colSums(gs[, 1:9])
+col_sum_df <- data.frame(genesets = names(col_sums), n_genes = col_sums)
+col_sum_df <- col_sum_df[order(col_sum_df$n_genes, decreasing = TRUE), ]
+col_sum_df$nudge_x <- c(rep(-140, 2), rep(110, 7))
+col_sum_df$genesets = gs_name_conversion[col_sum_df$genesets]
+
+f1a <- ggplot(col_sum_df, aes(x = n_genes, y = reorder(genesets, -n_genes), fill = genesets)) +
+  geom_bar(stat = "identity", color = "black", alpha = 0.7) +
+  scale_fill_brewer(palette = "Paired") +
+  geom_text(aes(label = signif(n_genes), x = n_genes + nudge_x)) +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        panel.grid = element_blank(),
+        axis.text.y = element_text(margin = margin(r = -5), colour = "black", face = "bold", size=10)
+        ) +
+  labs(x = "number of genes", y = NULL, title = NULL, fill=NULL) +
+  guides(fill="none")
+f1a
+```
+
+1b
+```{r}
+jaccard <- function(list1, list2) {
+  intersection <- length(intersect(list1, list2))
+  union <- length(union(list1, list2))
+  if (union == 0) {
+    return(0)  # This handles the edge case where both sets are empty.
+  } else {
+    return(intersection / union)
+  }
+}
+geneLists = list(
+  rownames(results)[results$trans],
+  rownames(results)[results$network],
+  rownames(results)[results$sensig],
+  rownames(results)[results$Senmayo],
+  rownames(results)[results$geneAge],
+  rownames(results)[results$cellAge],
+  rownames(results)[results$CSgene],
+  rownames(results)[results$SASP],
+  rownames(results)[results$Quest]
+  
+)
+numLists <- length(geneLists)
+jaccardMatrix <- matrix(0, nrow=numLists, ncol=numLists)
+for (i in 1:numLists) {
+  for (j in 1:numLists) {
+    jaccardMatrix[i, j] <- jaccard(geneLists[[i]], geneLists[[j]])
+  }
+}
+rownames(jaccardMatrix) <- colnames(jaccardMatrix) <- colnames(results)[1:9]
+order = colnames(results)[1:9]
+
+jaccardMatrix = melt(jaccardMatrix)
+jaccardMatrix$Var1 = factor(jaccardMatrix$Var1, levels = order)
+jaccardMatrix$Var2 = factor(jaccardMatrix$Var2, levels = order) 
+d <- jaccardMatrix
+d <- cbind(d,text=round(d[,3],2))
+d[d[,1]==d[,2],3] <- NA
+d$Var1 = gs_name_conversion[d$Var1]
+d$Var2 = gs_name_conversion[d$Var2]
+d$Var1 = factor(d$Var1, levels = col_sum_df$genesets)
+d$Var2 = factor(d$Var2, levels = col_sum_df$genesets)
+f1b = ggplot(d,aes(x=Var1,y=Var2,fill=value,label=text)) + 
+  geom_tile() + 
+  geom_text(size=6.5) + 
+  scale_fill_gradient2(low='white',high='red',mid='orange',midpoint=0.3,na.value = 'grey90') +
+  labs(fill = NULL) + 
+  theme_minimal() +
+  labs(x = NULL, y=NULL) + 
+  guides(fill="none") +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.y = element_text(margin = margin(r = -1), colour = "black", face = "bold", size=10),
+    axis.text.x = element_text(margin = margin(t = -3), colour = "black", face = "bold", size=10, angle = 35, hjust = 1),
+  )
+f1b
+```
+
+1c
+```{r}
+pie <- data.frame(
+  state = c(as.character(1:4), ">=5"),
+  amount = c(as.vector(table(results$n))[1:4], sum(results$n>=5)),
+  focus = c(0, 0, 0, 0, 0.4),
+  r0 = rep(0, 5)
+)
+pie$state = factor(pie$state, levels = c(as.character(1:4), ">=5"))
+
+fun=function(x) {paste0(x[2], " genes in\n", x[1], " gene sets")}
+labels=apply(pie, MARGIN = 1, fun)
+
+x = c(0.48, -0.6, -0.9, -0.5, 0.43)
+y = c(-0.1, 0.2, 0.97, 1.35, 1.4)
+
+f1c = ggplot(pie) +
+  geom_arc_bar(aes(x0 = 0, y0 = 0, r0 = r0, r = 1, amount = amount, fill = state, explode = focus), data = pie, stat = 'pie') +
+  coord_fixed() +
+  geom_text(aes(label = labels, x = x, y = y), size = 4.1) +
+  scale_fill_brewer(palette = "PuBu", type = 'qual') +
+  # geom_segment(aes(x=-0.19, y=0.88, xend=-0.3, yend=1.08)) +
+  # geom_segment(aes(x=-0.06, y=1.15, xend=0.05, yend=1.3)) +
+  # geom_segment(aes(x=-0.7, y= 0.85, xend =-0.4, yend = 0.65)) +
+  xlim(-1.5, 1.5) +
+  theme_void() +
+  theme(legend.position="none")
+```
+
+
+
+figure2: CoreScence assessment
+# Fig 2
+
+read in dge results
+```{r}
+result_list = list()
+i=1
+for (f in list.files("./data/in_vitro/bulk/transSig/gkz555_supplemental_files/")) {
+  path = paste0("./data/in_vitro/bulk/transSig/gkz555_supplemental_files/", f)
+  result = as.data.frame(readxl::read_excel(path))
+  result = result[!duplicated(result$`HG19en82 Gene Name`),]
+  rownames(result) = result$`HG19en82 Gene Name`
+  result_list[[i]] = result
+  i = i+1
+}
+
+
+for (sheet in 7:9) {
+  result = as.data.frame(readxl::read_excel("./data/in_vitro/sc_hayflick/elife-70283-fig1-data2.xlsx", sheet = sheet))
+  result = result[!duplicated(result$`HG19en82 Gene Name`),]
+  rownames(result) = result$`HG19en82 Gene Name`
+  result_list[[i]] = result
+  i=i+1
+}
+
+# Get the union of all rownames
+all_genes <- unique(unlist(lapply(result_list, rownames)))
+
+# Initialize an empty matrix with the desired rownames and column names
+sig_mtx <- matrix(NA, nrow = length(all_genes), ncol = length(result_list))
+logFC_mtx <- matrix(NA, nrow = length(all_genes), ncol = length(result_list))
+rownames(sig_mtx) = rownames(logFC_mtx) = all_genes
+colnames(sig_mtx) = colnames(logFC_mtx) = c(paste0('C', 1:9), 10:12)
+
+
+# Fill the matrix with the first column of each dataframe
+for (i in seq_along(result_list)) {
+  df <- result_list[[i]]
+  sig_mtx[rownames(df), i] <- as.numeric(df$FDR)
+  logFC_mtx[rownames(df), i] <- as.numeric(df$logFC)
+}
+
+```
+
+2b
+```{r}
+gs = read.csv("./data/coreGS_v2.csv", row.names = 1)
+core = rownames(gs)[gs$occurrence >=5]
+logFC_core = logFC_mtx[core,]
+sig_core = sig_mtx[core,]
+sig_core[is.na(sig_core)] = 1
+colnames(logFC_core) = c("WI38-Dox", "WI38-IR", "WI38-RS", "HAEC-IR", "HUVEC-IR", "IMR90-IR", "IMR90-RS", "WI38-Dox2", "WI38-onco", "WI38-RS2", "WI38-RIS", "WI38-CD")
+data = data.frame(
+  genes = rep(rownames(logFC_core), dim(logFC_core)[2]),
+  tissues = rep(colnames(logFC_core), each=dim(logFC_core)[1]),
+  logFC = as.vector(abs(logFC_core)),
+  significance = as.vector(sig_core)
+)
+data$n_gs = plyr::mapvalues(data$genes, rownames(gs), gs$occurrence, warn_missing = F)
+data$n_gs = paste0("reported in\n ", data$n_gs, " gene sets")
+data$n_gs = factor(data$n_gs, levels = paste0("reported in\n ", 7:5, " gene sets"))
+
+data$genes = as.factor(data$genes)
+data$genes <- factor(data$genes, levels = rev(levels(data$genes)))
+data$sign = as.factor(ifelse(data$logFC>0, "positive", "negative"))
+# data = na.omit(data)
+data$significance = ifelse(data$significance<0.05, "significant", "non significant")
+
+f2b = ggplot(data, aes(x = tissues, y = genes, fill = significance, size = logFC, color = significance)) +
+  geom_point(aes(alpha = significance), stroke=0) +
+  facet_grid(n_gs~., scales="free", space="free") +
+  scale_size_continuous(range = c(2,5), breaks = c(5, 10)) +
+  scale_alpha_manual(values = c(0.5, 1), na.value = NA) +
+  # scale_fill_manual(values = c("#237DFD", "#FB5225"), na.value = NA) +
+  scale_color_manual(values = c("non significant" = "#48cae4", "significant" = "#0077b6"), na.translate = FALSE) +
+  theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black"),
+    strip.text.y = element_text(angle = 0),
+    strip.background = element_blank(),
+    axis.text.x = element_text(angle = 50, hjust = 1),
+    legend.position = "bottom",
+    legend.spacing.x = unit(0.1, "cm"),
+    legend.box = "horizontal",
+    legend.key = element_blank(),
+    
+  ) +
+  guides(alpha = guide_legend(nrow = 2,order=1, label.position = "right", override.aes = list(size = 2.3, color = c("#0077b6"))  ),
+         size = guide_legend(order=3, label.position = "top"),
+         fill = "none", color="none") +
+  labs(x = NULL, y = NULL, color = NULL, size = "Absolute value\nlog2 fold change", fill=NULL, alpha="Significance")
+f2b
+```
+
+2a
+```{r}
+results = readRDS("./data/coreGS_v2.rds")
+fun = function(x){ifelse(x, 1, 0)}
+o = t(apply(as.matrix(results[,1:9]), MARGIN = 1, fun))
+o1 = o[c(rownames(results)[results$n == 7], rownames(results)[results$n == 6], rownames(results)[results$n == 5]), ]
+colnames(o1) = plyr::mapvalues(colnames(o1), names(gs_name_conversion), gs_name_conversion)
+
+o1 = melt(o1)
+colnames(o1) = c("gene", "geneset", "present")
+o1$present = as.character(o1$present)
+o1$n_genesets = plyr::mapvalues(o1$gene, rownames(results), results$n, warn_missing = F)
+o1$n_genesets = paste0("reported in\n ", o1$n_genesets, " gene sets")
+o1$n_genesets = factor(o1$n_genesets, levels = paste0("reported in\n ", as.character(7:5), " gene sets"))
+o1$gene = factor(o1$gene, levels = levels(data$genes))
+
+
+o1$SenSig = plyr::mapvalues(o1$gene, rownames(results), results$SenSig.d, warn_missing = F)
+o1$trans = plyr::mapvalues(o1$gene, rownames(results), results$trans.d, warn_missing = F)
+o1$cellAge = plyr::mapvalues(o1$gene, rownames(results), results$cellAge.d, warn_missing = F)
+o1$quest = plyr::mapvalues(o1$gene, rownames(results), results$quest.d, warn_missing = F)
+
+# o1$direction = NA
+# o1$direction[o1$geneset == "trans" & o1$trans == "up"] = "Inducing senescence"
+# o1$direction[o1$geneset == "cellAge" & o1$cellAge == "up"] = "Inducing senescence"
+# o1$direction[o1$geneset == "Quest" & o1$quest == "up"] = "Inducing senescence"
+# o1$direction[o1$geneset == "sensig" & o1$SenSig == "up"] = "Inducing senescence"
+# o1$direction[o1$geneset == "trans" & o1$trans == "down"] = "Inhibiting senescence"
+# o1$direction[o1$geneset == "cellAge" & o1$cellAge == "down"] = "Inhibiting senescence"
+# o1$direction[o1$geneset == "Quest" & o1$quest == "down"] = "Inhibiting senescence"
+# o1$direction[o1$geneset == "sensig" & o1$SenSig == "down"] = "Inhibiting senescence"
+# o1$direction[is.na(o1$direction)] = "direction not reported"
+
+
+o1$geneset = factor(o1$geneset, levels = rev(gs_name_conversion))
+# o1$shape = paste0(o1$present, o1$direction)
+# o1$shape[o1$shape == "1Inducing senescence"] = "Inducing senescence"
+# o1$shape[o1$shape == "1Inhibiting senescence"] = "Inhibiting senescence"
+# o1$direction = factor(o1$direction, levels = c("Inducing senescence", "Inhibiting senescence", "direction not reported"))
+palette <- c("#ef476f", "#f78c6b", "#E8B336", "#83d483", "#06d6a0", "#0cb0a9", "#118ab2", "#0c637f", "#4D42A0")
+f2a = ggplot(o1) +
+  geom_tile(data = o1, aes(x = geneset, y = gene), color = "#5B5C5B", size = 0.3, alpha = 0.2, fill="white") +
+  geom_point(data = o1, aes(x=geneset, y=gene, shape = present, color=geneset), stroke = 1, size=2) +
+  scale_shape_manual(values = c("0" = 30, "1"= 16), labels=c("Not present", "Present")) +
+  scale_color_manual(values = sample(palette)) +
+  # scale_fill_manual(values = c("0direction not clear" = "white", "1direction not reported" = "white", "Inducing senescence" = "red", "Inhibiting senescence" = "blue")) +
+  # scale_color_manual(values = c("Inhibiting senescence" = "blue", "Inducing senescence" = "red", "direction not reported" = "#424242")) +
+  facet_grid(n_genesets ~ ., scales="free", space="free") +
+  labs (x = NULL, y = NULL, color=NULL, shape = "SnG membership") +
+  guides(fill="none", color="none") + 
+  theme(
+    legend.key = element_rect(fill = "white", colour = "black"),
+    legend.key.width = unit(1, "cm"),
+    legend.key.height = unit(0.5, "cm"),
+    panel.background = element_rect(fill = "white"),
+    panel.grid.major =element_blank(),
+    panel.grid.minor = element_line(color = "black"),
+    axis.ticks = element_blank(),
+    strip.text.y = element_text(angle = 0),
+    strip.background = element_rect(fill = "white"),
+    legend.position = "bottom",
+    axis.text.x = element_text(margin = margin(t=-1), angle = 30, hjust=1),
+  )
+f2a
+```
+
+2a + 2b
+```{r}
+f2a + f2b + plot_layout(widths = c(1, 1.2))
+```
+
+2c 2d
+```{r}
+sig_mtx = sig_mtx[rowSums(is.na(sig_mtx))==0,]
+logFC_mtx = logFC_mtx[rowSums(is.na(logFC_mtx))==0,]
+mutual_genes = intersect(rownames(sig_mtx), rownames(logFC_mtx))
+sig_mtx = sig_mtx[mutual_genes,]
+logFC_mtx = logFC_mtx[mutual_genes,]
+
+
+df0 = data.frame(
+  genes = rownames(sig_mtx),
+  n = gs[rownames(sig_mtx),]$occurrence,
+  sig_pt = rowMeans(sig_mtx < 0.05, na.rm = T),
+  sign_pt = pmax(rowMeans(logFC_mtx>=0, na.rm = T),1-rowMeans(logFC_mtx>=0, na.rm = T)),
+  direction = gs[rownames(sig_mtx),]$direction,
+  percent_up = rowMeans(logFC_mtx>0, na.rm = T)
+)
+df0$n[is.na(df0$n)] = 0
+df0$sign_agree = NA
+for (i in 1:nrow(df0)) {
+  if (!is.na(df0$direction[i]) & df0$direction[i]=="up"){
+    df0$sign_agree[i] = df0$percent_up[i]
+  } else if (!is.na(df0$direction[i]) & df0$direction[i]=="down") {
+    df0$sign_agree[i] = 1 - df0$percent_up[i]
+  }
+}
+df0$median_logFC = apply(logFC_mtx, 1, function(x) median(abs(x), na.rm = TRUE))
+
+n_gs = rep(c("0", paste0(">=", 1:4), ">=5\n(CoreScence)"), 
+           c(
+             sum(df0$n == 0), 
+             sum(df0$n >= 1),
+             sum(df0$n >= 2),
+             sum(df0$n >= 3),
+             sum(df0$n >= 4),
+             sum(df0$n >= 5)
+             )
+           )
+df1 = cbind(
+  n_gs,
+  rbind(
+    df0[df0$n == 0, ],
+    df0[df0$n >= 1, ],
+    df0[df0$n >= 2, ],
+    df0[df0$n >= 3, ],
+    df0[df0$n >= 4, ],
+    df0[df0$n >= 5, ]
+  )
+)
+df1$n_gs = factor(df1$n_gs, levels=c("0", paste0(">=", 1:4), ">=5\n(CoreScence)"))
+# p1 = ggplot(df1, aes(x = n_gs, y=sign_pt, fill = n_gs)) +
+#   geom_violin(alpha = 0.5, adjust = 2) +
+#   geom_boxplot(alpha = 0.7, width=0.2) +
+#   stat_summary(fun = median, geom = "point", size = 2, color = "black") +
+#   stat_summary(fun= median, geom="line", aes(group=1), color="#3E3C3C")+
+#   geom_signif(comparisons = list(c(">=5", "0")),
+#               map_signif_level=TRUE, test = "wilcox.test",
+#               y_position = c( 1.01),
+#               textsize = 3
+#               # annotation = c("*", "ns.", "ns.")
+#               ) +
+#   scale_fill_brewer(palette = "PuBu") +
+#   labs(title = "Agreeing sign prop", x = "Occurrence in gene sets", y = "Proportion of tissues", fill = NULL) +
+#   scale_y_continuous(limits = c(min(df1$sign_pt), 1.05)) + 
+#   guides(fill='none') +
+#   theme_bw()
+# df1$n_gs[df1$n_gs == ">=5"] = ">=5"
+p2 = ggplot(df1, aes(x = n_gs, y=sig_pt, fill = n_gs)) +
+  geom_violin(alpha = 0.5, adjust = 1.5, scale = "width") +
+  stat_summary(fun = mean, geom = "point", size = 2, color = "black") +
+  stat_summary(fun=mean, geom="line", aes(group=1), color="#3E3C3C")+
+  geom_signif(comparisons = list(c(">=5\n(CoreScence)", "0")),
+              map_signif_level=TRUE, test = "wilcox.test", 
+              y_position = c(1.01), textsize = 3
+              ) +
+  scale_fill_brewer(palette = "BuPu") +
+  labs( x = "Occurrence in the gene sets", y = "Proportion of significance") +
+  scale_y_continuous(limits = c(min(df1$sig_pt), 1.1)) + 
+  guides(fill='none') +
+  theme_bw() +
+  theme(axis.text.x = element_text(face =c(rep("plain",5), "bold")))
+
+p3 = ggplot(df1, aes(x = n_gs, y=median_logFC, fill = n_gs)) +
+  geom_violin(alpha = 0.5, adjust = 1.5, scale = "width") +
+  # geom_boxplot(alpha = 0.7, width=0.2) +
+  stat_summary(fun = mean, geom = "point", size = 2, color = "black") +
+  stat_summary(fun=mean, geom="line", aes(group=1), color="#3E3C3C")+
+  geom_signif(comparisons = list(c(">=5\n(CoreScence)", "0")),
+              map_signif_level=TRUE, test = "wilcox.test", 
+              y_position = c(4.6), textsize = 3
+              ) +
+  scale_fill_brewer(palette = "RdPu") +
+  labs(x = "Occurrence in gene sets", y = "Abs log2FC") +
+  scale_y_continuous(limits = c(min(df1$median_logFC), 5)) +
+  guides(fill='none') +
+  theme_bw() +
+  theme(axis.text.x = element_text(face =c(rep("plain",5), "bold")))
+# n_gs = rep(c("=1", paste0(">=", 2:5)), 
+#            c(
+#              sum(df0$n == 1), 
+#              sum(df0$n >= 2),
+#              sum(df0$n >= 3),
+#              sum(df0$n >= 4),
+#              sum(df0$n >= 5)
+#            )
+# )
+# df2 = cbind(n_gs, rbind(
+#   df0[df0$n == 1, ],
+#   df0[df0$n >= 2, ],df0[df0$n >= 3, ],df0[df0$n >= 4, ],df0[df0$n >= 5, ]
+# ))
+# p3 = ggplot(df2, aes(x = n_gs, y = sign_agree, fill = n_gs)) + 
+#   geom_violin(alpha = 0.5, adjust = 1.5) +
+#   geom_boxplot(alpha = 0.7, width=0.2) +
+#   stat_summary(fun = median, geom = "point", size = 2, color = "black") +
+#   stat_summary(fun = median, geom="line", aes(group=1), color="#3E3C3C") +
+#   geom_signif(comparisons = list(c(">=5", "=1")),
+#               map_signif_level=TRUE, test = "wilcox.test", 
+#               y_position = c( 1.01
+#                              ), textsize = 3
+#               ) +
+#   scale_fill_brewer(palette = "RdPu") +
+#   scale_y_continuous(limits = c(min(df1$sign_agree), 1.1)) + 
+#   labs(title = "Agree with annotation", x = "Occurrence in gene sets", y = "Proportion of tissues") +
+#   guides(fill='none') +
+#   theme_bw()
+
+p3/p2
+
+```
+

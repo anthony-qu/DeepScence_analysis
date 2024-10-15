@@ -1,0 +1,384 @@
+---
+title: "benchmark"
+output: html_document
+date: "2024-04-10"
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(Seurat)
+library(pROC)
+library(reshape2)
+library(cowplot)
+library(patchwork)
+
+rm(list = ls())
+setwd("~/Library/Mobile Documents/com~apple~CloudDocs/Research/Aging/")
+```
+
+
+```{r}
+auroc_matrix = t(read.csv("./data/in_vitro/benchmark/benchmark_results.csv", row.names = 1))
+
+study_name = c("WI38-RS", "HCA2-RS", "IMR90-RIS" , "IMR90-OSKM", "HUVEC-RS")
+names(study_name) = c("hayflick", "hca", "notch", "oskm", "huvec")
+colnames(auroc_matrix) = study_name
+acc_matrix = t(read.csv("./data/in_vitro/benchmark/benchmark_acc_results.csv", row.names = 1))
+colnames(acc_matrix) = study_name
+f1_matrix = t(read.csv("./data/in_vitro/benchmark/benchmark_f1_results.csv", row.names = 1))
+colnames(acc_matrix) = study_name
+rownames(auroc_matrix) = c(
+  "ssGSEA: CoreScence", "ssGSEA: SenMayo", "ssGSEA: CellAge", "ssGSEA: GenAge", 
+  "ssGSEA: CSGene", "ssGSEA: SenSig", "ssGSEA: SeneQuest", "ssGSEA: De Cecco et al.", 
+  "ssGSEA: Casella et al.", "AUCell: CoreScence", "AUCell: SenMayo", "AUCell: CellAge", 
+  "AUCell: GenAge", "AUCell: CSGene", "AUCell: SenSig", "AUCell: SeneQuest", 
+  "AUCell: De Cecco et al.", "AUCell: Casella et al.", "SingleMarker: CDKN1A", "SingleMarker: CDKN2A", 
+  "SenCID", "DeepScence"
+)
+
+rownames(acc_matrix) = c("SingleMarker: CDKN1A", "SingleMarker: CDKN2A", "ssGSEA: SenMayo", "SenCID", "DeepScence")
+rownames(f1_matrix) = c("SingleMarker: CDKN1A", "SingleMarker: CDKN2A", "ssGSEA: SenMayo", "SenCID", "DeepScence")
+```
+
+```{r}
+# auroc_matrix <- auroc_matrix[!grepl("quest|trans|sasp|csgene|cellsig|p53|geneAge", rownames(auroc_matrix)), ]
+# acc_matrix <- acc_matrix[!grepl("quest|trans|sasp|csgene|cellsig|p53|geneAge", rownames(acc_matrix)), ]
+```
+
+
+# visualize
+AUROC benchmark
+```{r} 
+df = as.data.frame(auroc_matrix)
+df$Mean <- apply(df, 1, mean, na.rm = TRUE)
+df$method = rownames(df)
+  
+# Order by row means
+df <- df %>% 
+  arrange(desc(-Mean))
+
+# Melt the data frame into long format
+df_long_auc <- melt(df, id.vars = 'method')
+df_long_auc$method = factor(df_long_auc$method, levels = rownames(df))
+# makes changes to method names
+df_long_auc = df_long_auc[!grepl("CoreScence", df_long_auc$method),]
+
+# Plot the heatmap
+auc_plot = ggplot(df_long_auc, aes(x = variable, y = method, fill = value)) +
+  geom_tile(color='black', alpha=0.8, size=0.4) +
+  geom_text(aes(label = sprintf("%.2f", value)), color = "black", size = 5) +
+  scale_fill_distiller(palette = "RdYlGn", direction = 11) +
+  labs(title = NULL, fill = "AUROC", x = "Datasets", y = "Methods", caption = "Datasets")  +
+  theme_minimal() +
+  scale_x_discrete(position = "top") +
+  theme(axis.title.x = element_text(),
+        axis.title.x.top = element_blank(),  
+      axis.text.x.top = element_text(color = "black", face=c(rep('plain',5),"bold"), size=10, angle = 20, vjust = 0.3),
+    axis.text.y = element_text(color="black", face=c(rep('plain',19), "bold"),size=10,),
+    axis.title.y = element_text(hjust = 0.8, size=13),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    legend.justification = c(1, 1.07),
+    plot.caption = element_text(hjust = 0.5, size = 13)
+  )
+auc_plot
+```
+
+accuracy + f1
+```{r}
+df = as.data.frame(acc_matrix)
+df$Method <- rownames(df)
+df_long <- melt(df, id.vars = "Method", variable.name = "Dataset", value.name = "Accuracy")
+method_means <- df_long %>%
+  group_by(Method) %>%
+  summarize(mean_acc = mean(Accuracy, na.rm = TRUE)) %>%
+  arrange(desc(-mean_acc))
+df_long$Method <- factor(df_long$Method, levels = method_means$Method)
+p_acc = ggplot(df_long, aes(x = Accuracy, y = Method, fill=Method)) +
+  geom_violin(color="black", alpha=0.7, scale = "width") +
+  stat_summary(fun = mean, geom = "point", size = 1, color = "black") +
+  scale_fill_manual(values = rev(c("red", "#E19200", "#2DAEBF", "#175B59", "#64203C"))) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(size=10, color="black",angle = 45, hjust = 1),
+    axis.text.y = element_text(size=10, color="black", face=c(rep("plain",4), "bold")),
+    axis.title.x = element_text(size = 13),
+    axis.title.y = element_text(size = 13),
+    ) +
+  labs(x="Accuracy", y ="Methods", fill=NULL) +
+  xlim(0,1) + 
+  guides(fill="none")
+
+df = as.data.frame(f1_matrix)
+df$Method <- rownames(df)
+df_long <- melt(df, id.vars = "Method", variable.name = "Dataset", value.name = "Accuracy")
+method_means <- df_long %>%
+  group_by(Method) %>%
+  summarize(mean_acc = mean(Accuracy, na.rm = TRUE)) %>%
+  arrange(desc(-mean_acc))
+df_long$Method <- factor(df_long$Method, levels = method_means$Method)
+
+p_f1 = ggplot(df_long, aes(x = Accuracy, y = Method, fill=Method)) +
+  geom_violin(color="black", alpha=0.7, scale = "width") +
+  stat_summary(fun = mean, geom = "point", size = 1, color = "black") +
+  scale_fill_manual(values = rev(c("red", "#E19200", "#2DAEBF", "#175B59", "#64203C"))) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(size=10, color="black",angle = 45, hjust = 1),
+    axis.text.y = element_text(size=10, color="black", face=c(rep("plain",4), "bold")),
+    axis.title.x = element_text(size = 13),
+    axis.title.y = element_text(size = 13),
+    ) +
+  labs(x="F1 scores", y =NULL, fill=NULL) +
+  xlim(0,1) + 
+  guides(fill="none")
+
+```
+
+```{r}
+auc_plot / (p_acc + p_f1) + plot_layout(heights = c(1, 0.25))
+
+```
+
+ROC curves
+```{r}
+folder_path <- "./data/in_vitro/benchmark/"
+file_list <- list.files(path = folder_path, pattern = "scored_meta", full.names = TRUE)
+roc_plots <- list()
+
+score_columns <- c("ds", "SID_score", "AUCell_cellsig", "AUCell_CoreScence", "AUCell_quest")
+
+for (i in seq_along(file_list)) {
+  file <- file_list[i]
+  meta <- read.csv(file)
+  name <- gsub("_.*", "", basename(file))
+  print(name)
+  
+  # multiple ROC curves
+  roc1 = roc(meta$SnC, meta$ds, direction="<")
+  roc2 = roc(meta$SnC, meta$SID_score, direction="<")
+  roc3 = roc(meta$SnC, meta$AUCell_cellsig, direction="<")
+  roc4 = roc(meta$SnC, meta$AUCell_CoreScence, direction="<")
+  roc5 = roc(meta$SnC, meta$AUCell_quest, direction="<")
+  proc = ggroc(list(roc5, roc4, roc3, roc2, roc1), legacy.axes = TRUE) +
+    theme_bw() +
+    scale_color_manual(
+      values = c("1" = "#64203C", "2" = "#175B59", "3" = "#2DAEBF", "4" = "#E19200", "5" = "red"),
+      labels = c("1" = "AUCell: SeneQuest", "2" = "AUCell: CoreScence", "3" = "AUCell: SenSig", "4" = "SenCID", "5" = "DeepScence"),
+      breaks = c("5", "4", "3", "2", "1")
+      ) +
+    geom_abline(intercept = 0, slope = 1, color = "darkgrey", linetype = "dashed") +
+    labs(subtitle = study_name[name]) +
+    guides(color = guide_legend(override.aes = list(linewidth = 2)))
+  if (i == 1 | i==4) {
+    proc <- proc + labs(y = "sensitivity", color = NULL)
+  } else {
+    proc <- proc + labs(y = NULL, color = NULL)
+  }
+  roc_plots[[file]] = proc
+}
+
+legend <- get_legend(roc_plots[[1]])
+roc_plots_no_legend <- lapply(roc_plots, function(p) p + theme(legend.position = "none"))
+roc_plots_combined <- wrap_plots(roc_plots_no_legend, nrow = 2, ncol = 3) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "none")
+
+# Add the legend in the blank space of the second row
+final_combined <- roc_plots_combined + inset_element(legend, left =1.5, bottom = 0.5, right = 2, top = 0.3)
+final_combined
+```
+
+
+```{r}
+combined_plot <- wrap_elements(auc_plot) + wrap_elements(roc_plots) + 
+    plot_layout(widths = c(1, 2))
+combined_plot
+p_acc | p_f1
+```
+
+# Xenium
+```{r}
+folder_path <- "./data/Xenium/results/"
+file_list <- list.files(path = folder_path, pattern = "*.csv", full.names = TRUE)
+plot_list <- list()
+
+for (i in seq_along(file_list)) {
+  file <- file_list[i]
+  study_name <- gsub("_results.csv", "", basename(file))
+  df <- read.csv(file)
+  df$study_name = study_name
+  df$genes_added = as.factor(df$genes_added)
+  df_medians_deepscence <- df %>%
+    filter(method == "DeepScence") %>%
+    group_by(genes_added) %>%
+    summarize(Median_AUROC = median(AUC))
+  df_medians_SenCID <- df %>%
+    filter(method == "SenCID") %>%
+    group_by(genes_added) %>%
+    summarize(Median_AUROC = median(AUC))
+  
+  plot <- ggplot(df, aes(x = genes_added, y = AUC)) +
+    geom_boxplot(data = subset(df, method == "DeepScence"), aes(fill = method), outlier.shape = NA, alpha=0.7) +
+    geom_boxplot(data = subset(df, method == "SenCID"), aes(fill = method), outlier.shape = NA, alpha=0.7) +
+    geom_point(data = df_medians_deepscence, aes(x = genes_added, y = Median_AUROC), color = "#376348") +
+    geom_line(data = df_medians_deepscence, aes(x = genes_added, y = Median_AUROC, group = 1), color = "#376348") +
+    geom_point(data = df_medians_SenCID, aes(x = genes_added, y = Median_AUROC), color = "#984F00") +
+    geom_line(data = df_medians_SenCID, aes(x = genes_added, y = Median_AUROC, group = 1), color = "#984F00") +
+    facet_grid(.~study_name, scales = "free") + 
+    ylim(0.5,1) + 
+    labs(x = "Gene panel expansion", y = NULL, color=NULL, fill=NULL) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) + 
+    scale_fill_manual(values = c("DeepScence" = "#8CBF9F", "SenCID" = "orange")) 
+  
+  if (i != length(file_list)) {
+    plot <- plot + theme(legend.position = "none")
+  }
+  if (i == 1) {
+    plot <- plot + labs(y = "AUROC")
+  }
+  plot_list[[study_name]] <- plot
+}
+
+combined_plot <- wrap_plots(plot_list, ncol = length(plot_list))
+print(combined_plot)
+```
+
+
+
+# example plot
+hayflick
+```{r}
+library(ggsignif)
+hayflick = readRDS("./data/in_vitro/sc_hayflick/hayflick.rds")
+meta = read.csv("./data/in_vitro/sc_hayflick/metadata.csv", row.names = 1)
+hayflick@meta.data = meta
+umap = read.csv("./data/in_vitro/sc_hayflick/umap_coordinates.csv", row.names = 3)
+umap_coords <- as.matrix(umap[, c("UMAP1", "UMAP2")])
+hayflick[["umap"]] <- CreateDimReducObject(embeddings = umap_coords, key = "UMAP_", assay = DefaultAssay(hayflick))
+hayflick$PDL = factor(hayflick$PDL, levels = c(paste0("htert_", c(2,7)),paste0("PDL_", c(25,29,33,37,46,50))))
+```
+
+```{r}
+library(RColorBrewer)
+library(pals)
+p1 = ggplot(hayflick@meta.data, aes(x=PDL, y=ds, fill=PDL)) + 
+  geom_boxplot(alpha=0.7) +
+  scale_fill_manual(values = rev(brewer.pal(n = length(levels(hayflick@meta.data$PDL)), name = "RdYlBu"))) +
+  labs(x=NULL, y="DeepScence scores", fill=NULL, title = "GSE175533 WI-38") +
+  guides(fill='none') +
+  geom_signif(comparisons = list(c("PDL_50", "htert_2"), c("PDL_50", "htert_7")),
+              map_signif_level=TRUE, test = "wilcox.test", 
+              y_position = c(6, 5.1),
+              tip_length = 0.01, textsize = 0
+              ) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(face = "bold"))
+
+
+Idents(hayflick) = hayflick$PDL
+p2 = DimPlot(hayflick) + 
+  scale_color_manual(values = rev(brewer.pal(n = length(levels(hayflick@meta.data$PDL)), name = "RdYlBu"))) + labs(x = NULL)
+p3 <- FeaturePlot(hayflick, "ds") +
+  scale_color_gradientn(colors = coolwarm(100)) +
+  labs(title = "DeepScence score", color=NULL) +
+  theme(plot.title = element_text(face = "plain", size = 15))
+p1
+p1|p2
+```
+
+eto1
+```{r}
+df = eto1@meta.data
+df$condition = gsub("_.*", "", df$condition)
+ggplot(df, aes(x=condition, y=DeepScence_score, fill=condition)) + 
+  geom_boxplot(alpha=0.7) +
+  scale_fill_brewer(palette = "Set3", direction = -1) +
+  labs(x=NULL, y="DeepScence scores", fill=NULL, title="GSE226225 WI-38") +
+  guides(fill='none') +
+  geom_signif(comparisons = list(c("RS", "CTRL"), c("IR", "CTRL"), c("ETO", "CTRL")),
+              map_signif_level=TRUE, test = "wilcox.test",
+              y_position = c(1.8, 1.4,1),
+              tip_length = 0.01, textsize = 3
+              ) +
+  theme_bw()
+
+```
+
+
+# bi-modal distribution among datasets
+```{r}
+library(mclust)
+scores = hayflick$DeepScence_score
+model <- Mclust(scores, G = 2)
+data_df <- data.frame(DeepScence = scores)
+
+# Density prediction
+x_values <- seq(min(scores), max(scores), length.out = 1000)
+density_pred <- data.frame(value = x_values, density = dMclust(model, x_values))
+
+# Plot
+ggplot(data_df, aes(x = value)) +
+  geom_histogram(aes(y = ..density..), bins = 30, fill = "gray", color = "black", alpha = 0.5) +
+  geom_line(data = density_pred, aes(x = value, y = density, color = "Component"), size = 1) +
+  labs(title = "Histogram with Fitted Gaussian Mixture Model", x = "Value", y = "Density") +
+  theme_minimal() +
+  scale_color_manual(values = c("red", "blue"))
+```
+
+
+
+```{r}
+geneset = readRDS("./data/GTEx/union_sen_quest.rds")
+core = rownames(geneset)[geneset$n >= 5]
+
+expr_data <- FetchData(hayflick, vars = c(core, "DeepScence_score"))
+# expr_data$Encoder_core = -expr_data$Encoder_core
+correlations <- sapply(core, function(gene) cor(expr_data[[gene]], expr_data[["DeepScence_score"]], use = "complete.obs"))
+cor_df <- data.frame(Gene = names(correlations), Correlation = correlations)
+cor_df$direction = plyr::mapvalues(cor_df$Gene, rownames(geneset), geneset$direction, warn_missing = F)
+
+cor_df <- cor_df %>% arrange(desc(Correlation))
+cor_df$direction[cor_df$Gene %in% c("MAP2K3", "TERF2")] = "up"
+cor_df$direction[cor_df$Gene %in% c("SIRT1", "JUN", "RB1", "E2F1")] = "down"
+
+# Plot the correlations using ggplot2
+ggplot(na.omit(cor_df), aes(x = reorder(Gene, Correlation), y = Correlation, fill=direction)) +
+  geom_bar(stat = "identity", alpha=0.8) +
+  scale_fill_manual(values = c("blue", "red")) +
+  labs(title = "Correlation of Gene Expression with Score",
+       x =NULL,
+       y = "Correlation",
+       fill="senescence\nassociation") +
+  coord_flip() +
+  theme_bw()
+```
+
+
+```{r}
+data <- data.frame(
+  tissues = c("TS_Pancreas", "TS_Lung", "TS_Large_Intestine", 
+              "TS_Bladder", "TS_Skin", "TS_Bone_Marrow"),
+  DeepScence = c(0.153590, 0.258001, 0.021784, 0.265956, 0.242148, 0.133285),
+  SenCID = c(0.551826, 0.512948, 0.859649, 0.620795, 0.679011, 0.162235)
+)
+
+# Reshape the data for ggplot2
+data_melt <- melt(data, id.vars = "tissues")
+
+# Create the heatmap
+ggplot(data_melt, aes(x = variable, y = tissues, fill = value)) +
+  geom_tile(color="black", alpha=0.8, size=0.4) +
+  geom_text(aes(label = sprintf("%.2f", value)), color = "black", size = 5) +
+  scale_fill_gradient(low = "white", high = "blue") +
+  labs(title = "SnC proportions by tissue",
+       x = NULL, y = NULL, fill = NULL) +
+  guides(fill="none") +
+  theme_minimal()
+```
+
