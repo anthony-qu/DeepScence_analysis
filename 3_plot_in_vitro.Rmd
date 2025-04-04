@@ -1,0 +1,362 @@
+---
+title: "Plot in_vitro"
+output: html_document
+date: "2024-10-04"
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(reshape2)
+library(pROC)
+rm(list = ls())
+setwd("~/Library/Mobile Documents/com~apple~CloudDocs/Research/Aging/")
+options(Seurat.object.assay.version = "v3")
+```
+
+
+
+```{r}
+pp = "Current"
+compute_f1 <- function(col) {
+  TP <- sum(s$y == 1 & col == "SnC")  # True Positives
+  FP <- sum(s$y == 0 & col == "SnC")  # False Positives
+  FN <- sum(s$y == 1 & col != "SnC")  # False Negatives
+  precision <- ifelse((TP + FP) > 0, TP / (TP + FP), 0)
+  recall <- ifelse((TP + FN) > 0, TP / (TP + FN), 0)
+  f1 <- ifelse((precision + recall) > 0, 2 * (precision * recall) / (precision + recall), 0)
+  return(f1)
+}
+
+auc_mtx = NULL; acc_mtx=NULL; f1_mtx=NULL
+conversion = readRDS("./code/benchmark/method_names_conversion.rds")
+datasets = c("hayflick", "hca", "huvec", "notch", "oskm", "eto1")
+for (d in datasets) {
+  # read all
+  part1 = read.csv(paste0("./data/VADLIATION_DATA/IN_VITRO/", pp, "/metas/", d, "_scores_part1.csv"), row.names = 1)
+  part2 = read.csv(paste0("./data/VADLIATION_DATA/IN_VITRO/", pp, "/metas/", d, "_scores_part2.csv"), row.names = 1)
+  part1 = part1[rownames(part2),]
+  s = cbind(part1, part2)
+  
+  # fix method names
+  colnames(s) = plyr::mapvalues(colnames(s), names(conversion), conversion)
+
+  s$`b:CDKN1A` = ifelse(s$`SingleMarker:CDKN1A` > 0, "SnC", "Normal")
+  s$`b:CDKN2A` = ifelse(s$`SingleMarker:CDKN2A` > 0, "SnC", "Normal")
+  s$`b:Senmayo_ssGSEA` = ifelse(s$`ssGSEA:Senmayo` >= quantile(s$`ssGSEA:Senmayo`, 0.9), "SnC", "Normal")
+  
+  binary_cols = c(colnames(s)[startsWith(colnames(s), "b:")], "SID_binary")
+  cont_cols = colnames(s)[!colnames(s) %in% c(binary_cols, "y")]
+  
+  # calculate auc
+  s_cont = s[,cont_cols]
+  auc_values <- sapply(s_cont, function(col) {
+    roc_obj <- roc(s$y, col, direction = "<") 
+    auc(roc_obj) 
+  })
+  auc_mtx = cbind(auc_mtx, auc_values)
+  
+  # calculate acc
+  s_binary = s[,binary_cols]
+  acc_values <- sapply(s_binary, function(col) {
+    mean((s$y == 1 & col == "SnC") | (s$y == 0 & col != "SnC"))
+  })
+  acc_mtx = cbind(acc_mtx, acc_values)
+  
+  # calculate f1
+  f1_values <- sapply(s_binary, compute_f1)
+  f1_mtx <- cbind(f1_mtx, f1_values)
+}
+colnames(auc_mtx) = colnames(acc_mtx) = colnames(f1_mtx) = c("WI38-RS", "HCA2-RS", "HUVEC-RS", "IMR90-RIS", "IMR90-OSKM", "WI38-ETO") 
+
+# remove deepscence  + gs with <100 genes
+auc_mtx = auc_mtx[!rownames(auc_mtx) %in% c("DeepScence:Casella et al.", "DeepScence:Freund et al.", "DeepScence:De Cecco et al."),]
+```
+
+# get significance
+```{r}
+pvals <- sapply(rownames(auc_mtx), function(method) {
+  if(method == "DeepScence") {
+    return(NA)  # ds_5. compared to itself gives NA
+  } else {
+    ttest_result <- t.test(auc_mtx[method, ], auc_mtx["DeepScence", ], paired = TRUE)
+    return(ttest_result$p.value)
+  }
+})
+p.adj = pvals
+# p.adj <- p.adjust(pvals, method = "fdr", n = length(pvals)-1)
+p_sig <- ifelse(is.na(p.adj), NA,
+                ifelse(p.adj < 0.001, "***",
+                       ifelse(p.adj < 0.01, "**",
+                              ifelse(p.adj < 0.05, "*", "NS"))))
+
+
+# plot heatmap
+# auc plot
+
+df = as.data.frame(auc_mtx)
+df$Mean <- apply(df, 1, mean, na.rm = TRUE)
+df$method = rownames(df)
+df <- df %>% 
+  arrange(desc(-Mean))
+df_long_auc <- melt(df, id.vars = 'method')
+df_long_auc$method = factor(df_long_auc$method, levels = rownames(df))
+df_long_auc$p_label <- NA
+
+df_sig <- data.frame(
+  method = rownames(df),
+  variable = "Significance",  # new x-axis level for p-value annotation
+  value = 0.5,         # constant fill value so tile is white
+  p_label = p_sig[rownames(df)]    # significance stars (or NA for DeepScence)
+)
+df_long_auc_new <- rbind(df_long_auc, df_sig)
+df_long_auc_new$variable <- factor(df_long_auc_new$variable,
+                                   levels = c(setdiff(unique(df_long_auc_new$variable), "Significance"), "Significance"))
+
+
+# create offset
+levels_current <- levels(df_long_auc_new$variable)
+n_levels <- length(levels_current)
+positions <- 1:n_levels
+positions[(n_levels-1):n_levels] <- positions[(n_levels-1):n_levels] + 0.5
+position_lookup <- setNames(positions, levels_current)
+df_long_auc_new$xpos <- position_lookup[as.character(df_long_auc_new$variable)]
+
+df1 = df_long_auc_new[!df_long_auc_new$method %in% c("DeepScence:3" , "DeepScence:4", "DeepScence:6"),]
+df2 = df_long_auc_new[df_long_auc_new$method %in% c("DeepScence:3" , "DeepScence:4", "DeepScence:6", "DeepScence"),]
+df = df1
+
+```
+
+plot auc
+```{r}
+auc_plot <- ggplot() +
+  # Layer for non-Significance rows (using the value for fill)
+  geom_tile(data = subset(df, variable != "Significance"),
+            aes(x = xpos, y = method, fill = value),
+            color = 'black', alpha = 0.7, size = 0.4) +
+  # Layer for Significance rows (fill set to white)
+  geom_tile(data = subset(df, variable == "Significance"),
+            aes(x = xpos, y = method),
+            fill = "white",
+            color = 'black', alpha = 0.7, size = 0.4) +
+  geom_text(data = df, size=5,
+            aes(x = xpos, y = method, 
+                label = ifelse(variable == "Significance", p_label, sprintf("%.2f", value))),
+            color = "black") +
+  scale_fill_distiller(palette = "YlOrRd", direction = 11) +
+  labs(title = NULL, fill = "AUROC", x = "Datasets", y = "Methods", caption = "Datasets") +
+  theme_minimal() +
+  scale_x_continuous(position="top", breaks = positions, labels = levels_current, expand = c(0,0)) +
+  theme(axis.title.x = element_text(),
+        axis.title.x.top = element_blank(),  
+        axis.text.y = element_text(color = "black", size = 10, 
+                                   face = ifelse(levels(factor(df$method)) == "DeepScence", "bold", "plain")),
+        axis.text.x.top = element_text(color = "black", 
+                                       face = c(rep('plain',6), "bold", "bold"), 
+                                       size = 10, angle = 20, vjust = 0.3),
+        axis.title.y = element_text(hjust = 0.8, size = 13),
+        panel.background = element_blank(),
+        panel.grid = element_blank(),
+        legend.justification = c(1, 1.07),
+        plot.caption = element_text(hjust = 0.5, size = 13)
+  )
+
+auc_plot
+
+```
+
+# acc plot
+```{r}
+df = as.data.frame(acc_mtx)
+df$Method <- rownames(df)
+# only benchmark Deepscence and other methods
+df = df[df$Method %in% c("b:DeepScence", "SID_binary", "b:Senmayo_ssGSEA", "b:CDKN1A", "b:CDKN2A"),]
+df$Method = c("DeepScence", "SingleMarker:CDKN1A", "SingleMarker:CDKN2A","SenMayo",  "SenCID" )
+df_long <- melt(df, id.vars = "Method", variable.name = "Dataset", value.name = "Accuracy")
+method_means <- df_long %>%
+  group_by(Method) %>%
+  summarize(mean_acc = mean(Accuracy, na.rm = TRUE)) %>%
+  arrange(desc(-mean_acc))
+df_long$Method <- factor(df_long$Method, levels = method_means$Method)
+p_acc = ggplot(df_long, aes(x = Accuracy, y = Method, fill=Method)) +
+  geom_violin(color="black", alpha=0.7, scale = "width") +
+  stat_summary(fun = mean, geom = "point", size = 1, color = "black") +
+  scale_fill_manual(values = rev(c("red", "#E19200", "#e07a5f", "#06d6a0", "#f2cc8f"))) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(size=10, color="black",angle = 45, hjust = 1),
+    axis.text.y = element_text(color = "black", size = 10, 
+                               face = ifelse(levels(factor(df_long$Method)) == "DeepScence", "bold", "plain")),
+    axis.title.x = element_text(size = 13),
+    axis.title.y = element_text(size = 13),
+  ) +
+  labs(x="Accuracy", y ="Methods", fill=NULL) +
+  xlim(0,1) + 
+  guides(fill="none")
+
+# f1 plot
+df = as.data.frame(f1_mtx)
+df$Method <- rownames(df)
+df = df[df$Method %in% c("b:DeepScence", "SID_binary", "b:Senmayo_ssGSEA", "b:CDKN1A", "b:CDKN2A"),]
+df$Method = c("DeepScence", "SingleMarker:CDKN1A", "SingleMarker:CDKN2A","SenMayo",  "SenCID" )
+df_long <- melt(df, id.vars = "Method", variable.name = "Dataset", value.name = "Accuracy")
+method_means <- df_long %>%
+  group_by(Method) %>%
+  summarize(mean_acc = mean(Accuracy, na.rm = TRUE)) %>%
+  arrange(desc(-mean_acc))
+df_long$Method <- factor(df_long$Method, levels = method_means$Method)
+
+p_f1 = ggplot(df_long, aes(x = Accuracy, y = Method, fill=Method)) +
+  geom_violin(color="black", alpha=0.7, scale = "width") +
+  stat_summary(fun = mean, geom = "point", size = 1, color = "black") +
+  scale_fill_manual(values = rev(c("red", "#E19200", "#e07a5f", "#06d6a0", "#f2cc8f"))) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(size=10, color="black",angle = 45, hjust = 1),
+    axis.text.y = element_text(color = "black", size = 10, 
+                               face = ifelse(levels(factor(df_long$Method)) == "DeepScence", "bold", "plain")),
+    axis.title.x = element_text(size = 13),
+    axis.title.y = element_text(size = 13),
+  ) +
+  labs(x="F1 scores", y =NULL, fill=NULL) +
+  xlim(0,1) + 
+  guides(fill="none")
+p_acc_f1 = p_acc | p_f1
+
+```
+
+
+# ROC curves
+```{r}
+roc_plots <- list()
+study_name = c("WI38-RS", "HCA2-RS", "HUVEC-RS", "IMR90-RIS", "IMR90-OSKM", "WI38-ETO") 
+names(study_name) = datasets
+
+for (d in datasets) {
+  # Read both parts and merge them
+  part1 <- read.csv(paste0("./data/VADLIATION_DATA/IN_VITRO/", pp, "/metas/", d, "_scores_part1.csv"), row.names = 1)
+  part2 <- read.csv(paste0("./data/VADLIATION_DATA/IN_VITRO/", pp, "/metas/", d, "_scores_part2.csv"), row.names = 1)
+  part1 <- part1[rownames(part2), ]
+  s <- cbind(part1, part2)
+  
+  
+  # Calculate ROC curves using s$y as the binary outcome
+  roc1 <- roc(s$y, s$ds_5., direction = "<")
+  roc2 <- roc(s$y, s$SID_score, direction = "<")
+  roc3 <- roc(s$y, s$sensig_AUCell, direction = "<")
+  roc4 <- roc(s$y, s$sensig_ssGSEA, direction = "<")
+  roc5 <- roc(s$y, s$Quest_AUCell, direction = "<")
+  
+  # Create the ROC plot with custom colors and labels
+  proc <- ggroc(list(roc5, roc4, roc3, roc2, roc1), legacy.axes = TRUE) +
+    theme_bw() +
+    scale_color_manual(
+      values = c("1" = "#64203C", "2" = "#175B59", "3" = "#2DAEBF", "4" = "#E19200", "5" = "red"),
+      labels = c("1" = "AUCell:SeneQuest", "2" = "ssGESA:SenSig",
+                 "3" = "AUCell:SenSig", "4" = "SenCID", "5" = "DeepScence"),
+      breaks = c("5", "4", "3", "2", "1")
+    ) +
+    geom_abline(intercept = 0, slope = 1, color = "darkgrey", linetype = "dashed") +
+    labs(subtitle = study_name[d]) +
+    guides(color = guide_legend(override.aes = list(linewidth = 2)))
+  
+  # Optionally add y-axis label for the first and fourth datasets (if desired)
+  i <- which(datasets == d)
+  if (i == 1 | i == 5) {
+    proc <- proc + labs(y = "sensitivity", color = NULL)
+  } else {
+    proc <- proc + labs(y = NULL, color = NULL)
+  }
+  
+  roc_plots[[d]] <- proc
+}
+legend <- get_legend(roc_plots[[1]])
+roc_plots_no_legend <- lapply(roc_plots, function(p) p + theme(legend.position = "none"))
+
+# Combine the ROC plots into a grid (here 2 rows x 3 columns)
+roc_plots_combined <- wrap_plots(roc_plots_no_legend, nrow = 3, ncol = 2) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "none")
+
+# Add the legend in a designated inset space on the combined plot
+final_combined <- roc_plots_combined + inset_element(legend, left = 3, bottom = 0.5, right = 2, top = 0.3)
+final_combined
+
+```
+
+# save plots
+```{r}
+final_combined
+p_acc_f1
+ggsave(filename = "./manuscript/new_figures/f3c.png", plot = auc_plot, width = 7, height = 9, dpi = 300)
+```
+
+```{r}
+# conversion <- c(
+#   # ssGSEA columns
+#   "trans_ssGSEA"      = "ssGSEA:Casella et al.",
+#   "network_ssGSEA"    = "ssGSEA:Freund et al.",
+#   "sensig_ssGSEA"     = "ssGSEA:SenSig",
+#   "Senmayo_ssGSEA"    = "ssGSEA:Senmayo",
+#   "geneAge_ssGSEA"    = "ssGSEA:GenAge",
+#   "cellAge_ssGSEA"    = "ssGSEA:CellAge",
+#   "CSgene_ssGSEA"     = "ssGSEA:CSgene",
+#   "SASP_ssGSEA"       = "ssGSEA:De Cecco et al.",
+#   "Quest_ssGSEA"      = "ssGSEA:SeneQuest",
+#   "CoreScence_ssGSEA" = "ssGSEA:CoreScence",
+# 
+#   # AUCell columns
+#   "trans_AUCell"      = "AUCell:Casella et al.",
+#   "network_AUCell"    = "AUCell:Freund et al.",
+#   "sensig_AUCell"     = "AUCell:SenSig",
+#   "Senmayo_AUCell"    = "AUCell:Senmayo",
+#   "geneAge_AUCell"    = "AUCell:GenAge",
+#   "cellAge_AUCell"    = "AUCell:CellAge",
+#   "CSgene_AUCell"     = "AUCell:CSgene",
+#   "SASP_AUCell"       = "AUCell:De Cecco et al.",
+#   "Quest_AUCell"      = "AUCell:SeneQuest",
+#   "CoreScence_AUCell" = "AUCell:CoreScence",
+# 
+#   # Single markers
+#   "CDKN1A"            = "SingleMarker:CDKN1A",
+#   "CDKN2A"            = "SingleMarker:CDKN2A",
+#   "y"                 = "y",
+# 
+#   # DeepScence and corresponding b columns
+#   "ds_trans"          = "DeepScence:Casella et al.",
+#   "b_trans"           = "b:Casella et al.",
+#   "ds_network"        = "DeepScence:Freund et al.",
+#   "b_network"         = "b:Freund et al.",
+#   "ds_sensig"         = "DeepScence:SenSig",
+#   "b_sensig"          = "b:SenSig",
+#   "ds_Senmayo"        = "DeepScence:Senmayo",
+#   "b_Senmayo"         = "b:Senmayo",
+#   "ds_geneAge"        = "DeepScence:GenAge",
+#   "b_geneAge"         = "b:GenAge",
+#   "ds_cellAge"        = "DeepScence:CellAge",
+#   "b_cellAge"         = "b:CellAge",
+#   "ds_CSgene"         = "DeepScence:CSgene",
+#   "b_CSgene"          = "b:CSgene",
+#   "ds_SASP"          = "DeepScence:De Cecco et al.",
+#   "b_SASP"           = "b:De Cecco et al.",
+#   "ds_Quest"         = "DeepScence:SeneQuest",
+#   "b_Quest"          = "b:SeneQuest",
+# 
+#   "ds_3."            = "DeepScence:3",
+#   "b_3."             = "b:3",
+#   "ds_4."            = "DeepScence:4",
+#   "b_4."             = "b:4",
+#   "ds_5."            = "DeepScence",
+#   "b_5."             = "b:DeepScence",
+#   "ds_6."            = "DeepScence:6",
+#   "b_6."             = "b:6",
+# 
+#   # Additional columns
+#   "SID_score"         = "SenCID",
+#   "SID_binary"        = "SID_binary"
+# )
+# saveRDS(conversion, "./code/benchmark/method_names_conversion.rds")
+```

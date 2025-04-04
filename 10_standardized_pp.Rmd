@@ -1,0 +1,235 @@
+---
+title: "10_standardized_pp"
+output: html_document
+date: "2025-03-08"
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(Seurat)
+library(reticulate)
+library(anndata)
+library(Matrix)
+library(data.table)
+library(SeuratDisk)
+rm(list = ls())
+setwd("~/Library/Mobile Documents/com~apple~CloudDocs/Research/Aging/")
+gs = read.csv("./code/DeepScence/DeepScence/data/coreGS_v2.csv", row.names = 1)
+options(Seurat.object.assay.version = "v3")
+mouse_to_human = readRDS("./data/in_vivo/mouse_to_human.rds")
+```
+
+# IN VITRO
+```{r}
+# read each one from raw counts, filter for only clearly defined sncs and normal cells. append column "SnC". 
+
+# hayflick
+counts = read.csv("./data/in_vitro/sc_hayflick/raw_counts.csv", row.names = 1)
+m = read.csv("./data/in_vitro/sc_hayflick/m.csv", row.names = 1)
+d = CreateSeuratObject(counts = t(counts), meta.data = m)
+d = d[,d$PDL %in% c("htert_2", "htert_7", "PDL_50")]
+d$SnC = ifelse(d$PDL=="PDL_50", 1, 0)
+saveRDS(d, "./data/VADLIATION_DATA/IN_VITRO/RAW/hayflick.rds")
+
+# hca
+d = readRDS("./data/in_vitro/sc_HCA2/hca.rds")
+d = d[,d$condition != "LowPD50Gy"]
+mtx = GetAssayData(d, layer = "counts")
+d = CreateSeuratObject(mtx, meta.data = d@meta.data)
+d$SnC = ifelse(d$condition == "senescence", 1,0)
+saveRDS(d, "./data/VADLIATION_DATA/IN_VITRO/RAW/hca.rds")
+
+# huvec
+folder = "./data/in_vitro/sc_HUVEC/GSE102090_RAW/"
+l = list()
+for (f in c("p4", "p16")) {
+  p = paste0(folder, f)
+  d = Read10X(p)
+  d = CreateSeuratObject(d)
+  d$passage = f
+  l[[f]] = d
+}
+d <- merge(l[[1]], y = l[-1])
+d$SnC = ifelse(d$passage == "p16", 1, 0)
+saveRDS(d, "./data/VADLIATION_DATA/IN_VITRO/RAW/huvec.rds")
+
+# notch
+d = read.delim("./data/in_vitro/sc_notch/GSE115301_Growing_Sen_10x_count.txt.gz", sep = "\t", row.names = 1)
+m  = read.delim("./data/in_vitro/sc_notch/GSE115301_Growing_Sen_10x_metadata.txt", sep = "\t", row.names = 1)
+d <- Matrix(as.matrix(d), sparse = TRUE)
+d = CreateSeuratObject(d, meta.data = m)
+d$SnC = ifelse(d$Condition1 == "Senescence1", 1,0)
+saveRDS(d, "./data/VADLIATION_DATA/IN_VITRO/RAW/notch.rds")
+
+# oskm
+d = read.delim("./data/in_vitro/sc_oskm/origin_matrix_GSE94980.txt")
+d <- Matrix(as.matrix(d), sparse = TRUE)
+d = CreateSeuratObject(d)
+d$SnC = ifelse(grepl("OSKM", colnames(d)), 1,0)
+saveRDS(d, "./data/VADLIATION_DATA/IN_VITRO/RAW/oskm.rds")
+```
+
+```{r}
+# create a data list, for each data in list, perform the same pp
+datasets = c("hayflick", "hca", "huvec", "notch", "oskm")
+for (d in datasets) {
+  print(d)
+  adata = readRDS(paste0("./data/VADLIATION_DATA/IN_VITRO/RAW/", d, ".rds"))
+  adata = NormalizeData(adata)
+  adata[["percent.mt"]] <- PercentageFeatureSet(adata, pattern = "^MT-")
+
+  # standard pp
+  adata <- subset(
+    adata, 
+    subset = nFeature_RNA > 200 & 
+    nFeature_RNA < 7000 & 
+    percent.mt < 20
+  )
+  
+  saveRDS(adata, paste0("./data/VADLIATION_DATA/IN_VITRO/Standard/rds/", d, ".rds"))
+  
+  # to h5ad
+  SaveH5Seurat(adata, paste0("./data/VADLIATION_DATA/IN_VITRO/Standard/h5ad/", d, ".h5seurat"), overwrite = T)
+  Convert(paste0("./data/VADLIATION_DATA/IN_VITRO/Standard/h5ad/", d, ".h5seurat"), dest = "h5ad", overwrite = T)
+}
+```
+
+
+
+# IN VIVO
+```{r}
+# read each one from raw counts, filter for only clearly defined sncs and normal cells. append column "SnC". 
+# ALSO get cell type!
+
+# mouse testes
+d = readRDS("./data/in_vivo/sc_orchitis/GSE183625_orchitis.rds")
+d@active.assay = "RNA"
+d = d[,d$subtype == "Ld"]
+d$SnC = ifelse(d$stim == "O50t", 1, 0)
+d$celltype = "Ld"
+d[["SCT"]] = NULL
+saveRDS(d, "./data/VADLIATION_DATA/IN_VIVO/RAW/mouse_testes.rds")
+
+# mouse muscle
+d = readRDS("./data/in_vivo/sc_muscle_injury/GSE214892_seu.rds")
+d = UpdateSeuratObject(d)
+d$celltype = d$cluster
+d$SnC = ifelse(d$stim == "CTX", 1, 0)
+d[["integrated"]] = NULL
+d[["RNA"]]$scale.data = NULL
+saveRDS(d, "./data/VADLIATION_DATA/IN_VIVO/RAW/mouse_muscle.rds")
+
+# human oral
+d = readRDS("./data/in_vivo/sc_gingiva/fibroblasts.rds")
+VariableFeatures(d) = NULL
+d$celltype = "Fibroblast"
+mtx = GetAssayData(d, layer="counts")
+d = CreateSeuratObject(mtx, meta.data = d@meta.data)
+d$SnC = ifelse(d$Condition == "periodontitis", 1, 0)
+saveRDS(d, "./data/VADLIATION_DATA/IN_VIVO/RAW/human_oral.rds")
+
+# human IPF
+d = readRDS("./data/VADLIATION_DATA/IN_VIVO/Current/rds/human_IPF.rds")
+genes = rownames(d)
+d = readRDS("./data/in_vivo/sc_IPF/counts_subset.rds")
+rownames(d) = genes
+d = d[,d$cell_type == "AT1"]
+d$SnC = ifelse(d$health_status == "IPF", 1, 0)
+d$celltype = d$cell_type
+mtx = GetAssayData(d, layer="counts")
+d = CreateSeuratObject(mtx, meta.data = d@meta.data)
+saveRDS(d, "./data/VADLIATION_DATA/IN_VIVO/RAW/human_IPF.rds")
+
+# mouse_lung_cancer
+# raw not provided in GEO, they directly deposit rds file
+d = readRDS("./data/additional_sc/Lung_cancer/GSE203447_seu_preprocessed_s1-3_CCycle_removed_annotated.rds")
+d@active.assay = "RNA"
+conversion <- c(
+  "Interstitial Macrophages" = "Macrophages",
+  "Alveolar Macrophages" = "Macrophages",
+  "Classical Monocytes (Ly6c2+)" = "Monocytes",
+  "Non-Classical Monocytes (Ly6C2-)" = "Monocytes",
+  "Dendritic Cells (CD103+/CD11b-)" = "Dendritic Cells",
+  "Dendritic Cells (CCl17+/CD103-/Cd11b-)" = "Dendritic Cells",
+  "CD8+ T cells" = "T cells",
+  "CD4+ T cells" = "T cells",
+  "B cells" = "B Cells",
+  "NK cells" = "NK Cells",
+  "Eosinophils" = "Eosinophils",
+  "Type 1 alveolar cells" = "AT1",
+  "Type 2 alveolar cells" = "AT2",
+  "Vascular Endothelial cells" = "Endothelial",
+  "Capillary endothelial cells" = "Endothelial",
+  "Interstitial Fibroblasts" = "Fibroblasts",
+  "Lipofibroblasts" = "Fibroblasts",
+  "Smooth muscle cells" = "Smooth muscle cells",
+  "Ciliated cells" = "Epithelial",
+  "Unknown" = "Unknown"
+)
+d$celltype <- plyr::mapvalues(d$cell.type, from = names(conversion), to = conversion)
+d = d[,d$celltype!="Unknown"]
+d$SnC = ifelse(d$mCherry.Count>0, 1,0)
+d = d[,d$celltype %in% c("AT2", "Endothelial", "Fibroblasts", "Macrophages")]
+VariableFeatures(d) = NULL
+d[["SCT"]] = NULL
+saveRDS(d, "./data/VADLIATION_DATA/IN_VIVO/RAW/mouse_lung_cancer.rds")
+
+# mouse_tauopathy
+d = readRDS("./data/additional_sc/AD/tau.rds")
+VariableFeatures(d) = NULL
+d[["RNA"]]$scale.data = NULL
+d$SnC = ifelse(d$condition == "tau", 1,0 )
+d$celltype = "micro"
+saveRDS(d, "./data/VADLIATION_DATA/IN_VIVO/RAW/mouse_tauopathy.rds")
+
+# mouse_heart_CMs
+d = readRDS("./data/additional_sc/TAC_cardio/CM.rds")
+d = d[,d$condition != "TAC2w+CDKi"]
+d$SnC = ifelse(d$condition=="TAC2w", 1, 0)
+d$celltype = "CMs"
+saveRDS(d, "./data/VADLIATION_DATA/IN_VIVO/RAW/mouse_heart_CMs.rds")
+
+# mouse_heart_ECs
+d = readRDS("./data/additional_sc/TAC_cardio/EC.rds")
+VariableFeatures(d) = NULL
+d[["RNA"]]$scale.data = NULL
+d$SnC = ifelse(d$condition == "TAC2w", 1,0)
+d$celltype = "ECs"
+saveRDS(d, "./data/VADLIATION_DATA/IN_VIVO/RAW/mouse_heart_ECs.rds")
+```
+
+```{r}
+# create a data list, for each data in list, perform the same pp
+# datasets = c("human_IPF", "human_oral", "mouse_muscle", "mouse_testes", "mouse_lung_cancer","mouse_tauopathy", "mouse_heart_CMs", "mouse_heart_ECs")
+datasets = c("human_IPF", "human_oral")
+for (d in datasets) {
+  print(d)
+  adata = readRDS(paste0("./data/VADLIATION_DATA/IN_VIVO/RAW/", d, ".rds"))
+  
+  adata = NormalizeData(adata)
+  if (startsWith(d, "mouse_")) {
+    adata[["percent.mt"]] <- PercentageFeatureSet(adata, pattern = "^mt-")
+  } else {
+    adata[["percent.mt"]] <- PercentageFeatureSet(adata, pattern = "^MT-")
+  }
+  mt_threshold = ifelse(d == "mouse_heart_CMs", 100, 20) # smart-seq2 has more mt
+
+  # standard pp
+  adata <- subset(
+    adata,
+    subset = nFeature_RNA > 200 &
+    nFeature_RNA < 7000 &
+    percent.mt < mt_threshold
+  )
+
+  saveRDS(adata, paste0("./data/VADLIATION_DATA/IN_VIVO/Standard/rds/", d, ".rds"))
+
+  # to h5ad
+  SaveH5Seurat(adata, paste0("./data/VADLIATION_DATA/IN_VIVO/Standard/h5ad/", d, ".h5seurat"), overwrite = T)
+  Convert(paste0("./data/VADLIATION_DATA/IN_VIVO/Standard/h5ad/", d, ".h5seurat"), dest = "h5ad", overwrite = T)
+}
+```
+

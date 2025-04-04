@@ -1,0 +1,125 @@
+---
+title: "Check morphology"
+output: html_document
+date: "2025-03-23"
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(Seurat)
+library(tidyverse)
+library(EBImage)
+rm(list = ls())
+setwd("~/Library/Mobile Documents/com~apple~CloudDocs/Research/Aging/")
+```
+
+```{r}
+# d2: Vis5a; d5: Vis7B
+d = readRDS("./data/in_vivo/sp_mouse_injury/d2.rds")
+Idents(d) = d$is.injury
+SpatialDimPlot(d)
+```
+
+# read tif d2
+```{r}
+img <- readImage("./data/in_vivo/sp_mouse_injury/morphology/GSM4904759_Vis5A_Stitched_Image_0.tif")
+
+```
+
+
+```{r}
+# normal 1
+img_crop <- img[6200:7000, 14000:14800, ]
+display(img_crop)
+writeImage(img_crop, "./data/morphology_examples/d2_healthy_1.png")
+```
+
+```{r}
+# normal 2
+img_crop <- img[7000:9000, 13000:15000, ]
+display(img_crop)
+writeImage(img_crop, "./data/morphology_examples/d2_healthy_2.png")
+```
+
+```{r}
+# injury 1
+img_crop <- img[7000:7800, 8000:8800, ]
+display(img_crop)
+writeImage(img_crop, "./data/morphology_examples/d2_injured_1.png")
+```
+
+```{r}
+# injury 2
+img_crop <- img[9000:11000, 8000:10000, ]
+display(img_crop)
+writeImage(img_crop, "./data/morphology_examples/d2_injured_2.png")
+```
+
+# read tif d5
+```{r}
+img <- readImage("./data/in_vivo/sp_mouse_injury/morphology/GSM4904760_Vis7B_Stitched_Image_0.tif")
+
+```
+
+
+```{r}
+# normal 1
+img_crop <- img[8200:9000, 13000:13800, ]
+display(img_crop)
+writeImage(img_crop, "./data/morphology_examples/d5_healthy_1.png")
+```
+
+```{r}
+# normal 2
+img_crop <- img[9000:10000, 13000:14000, ]
+display(img_crop)
+writeImage(img_crop, "./data/morphology_examples/d5_healthy_2.png")
+```
+
+```{r}
+# injury 1
+img_crop <- img[8000:8800, 7400:8200, ]
+display(img_crop)
+writeImage(img_crop, "./data/morphology_examples/d5_injured_1.png")
+```
+
+```{r}
+# injury 2
+img_crop <- img[9000:10000, 7000:8000, ]
+display(img_crop)
+writeImage(img_crop, "./data/morphology_examples/d5_injured_2.png")
+```
+
+
+# read ctx
+```{r}
+library(png)
+library(grid)
+img <- readPNG("./data/in_vivo/sp_mouse_injury/morphology/outs/spatial/tissue_hires_image.png")
+sub_img <- img[500:800, 400:700, ]
+grid.raster(sub_img)
+writePNG(sub_img, "./data/morphology_examples/ctx_injured_1.png")
+```
+
+```{r}
+sub_img <- img[900:1200, 200:500, ]
+grid.raster(sub_img)
+writePNG(sub_img, "./data/morphology_examples/ctx_injured_2.png")
+```
+
+```{r}
+sub_img <- img[800:1100, 1100:1400, ]
+plot(as.raster(sub_img))
+writePNG(sub_img, "./data/morphology_examples/ctx_healthy_1.png")
+```
+
+```{r}
+sub_img <- img[700:1000, 200:500, ]
+plot(as.raster(sub_img))
+writePNG(sub_img, "./data/morphology_examples/ctx_healthy_2.png")
+```
+
+
+
